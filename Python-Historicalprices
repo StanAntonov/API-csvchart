@@ -1,0 +1,135 @@
+import requests
+import pandas as pd
+import os
+import traceback
+import matplotlib.pyplot as plt
+
+def main():
+    try:
+        print("Starting")
+        
+        # Service name, key and the symbol we will be working with. You can use env files for better security.
+        SERVICE_NAME = "Service Name"
+        SERVICE_KEY = "Service Key"
+        SELECTED_SYMBOL = "FP-LBR-0150"
+        
+	#Change the directory and file name as needed.
+        OUTPUT_DIR = r"Your directory"
+        OUTPUT_PATH = os.path.join(OUTPUT_DIR, "fastmarkets_data.csv")
+        
+        print("Authenticating")
+        
+        #The authentication
+        auth_url = "https://auth.fastmarkets.com/connect/token"
+        post_data = {
+            'grant_type': 'servicekey',
+            'client_id': 'service_client',
+            'scope': 'fastmarkets.physicalprices.api', 
+            'serviceName': SERVICE_NAME,
+            'serviceKey': SERVICE_KEY
+        }
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+
+        print(f"   Calling auth endpoint: {auth_url}")
+        response = requests.post(auth_url, data=post_data, headers=headers, verify=False)
+        print(f"   Auth response status: {response.status_code}")
+        
+        response.raise_for_status()
+        access_token = f"bearer {response.json()['access_token']}"
+        print("Successful")
+
+        #Defining the endpoints
+        instruments_url = f"https://api.fastmarkets.com/physical/v2/Instruments?Symbols={SELECTED_SYMBOL}"
+        historical_prices_url = f"https://api.fastmarkets.com/physical/v2/Prices/history/None/exclude?Symbols={SELECTED_SYMBOL}&FromDate=2025-01-01"
+
+        api_headers = {'Authorization': access_token}
+
+        print("Fetching data")
+        
+        #Get data
+        print(f"   Fetching instruments from: {instruments_url}")
+        instruments_response = requests.get(instruments_url, headers=api_headers, verify=False)
+        print(f"   Instruments response status: {instruments_response.status_code}")
+        instruments_response.raise_for_status()
+        instruments = instruments_response.json()
+        print(f" Got {len(instruments.get('instruments', []))} instruments")
+
+        print(f"   Fetching historical prices from: {historical_prices_url}")
+        prices_response = requests.get(historical_prices_url, headers=api_headers, verify=False)
+        print(f"   Prices response status: {prices_response.status_code}")
+        prices_response.raise_for_status()
+        historical_prices = prices_response.json()
+        print(f"   Got historical prices data")
+
+        # JSON to dataframe, ensure you have pandas
+        print("Step 3: Transforming data...")
+        instruments_table = pd.DataFrame(instruments['instruments'])
+
+        # Expand the nested prices
+        prices_records = []
+        for instrument in historical_prices['instruments']:
+            for price in instrument['prices']:
+                prices_records.append({
+                    'symbol': instrument['symbol'],
+                    'assessmentDate': price['assessmentDate'],
+                    'low': price['low'], 
+                    'high': price['high'],
+                    'revision': price['revision']
+                })
+
+        historical_prices_table = pd.DataFrame(prices_records)
+        print(f"   Created {len(prices_records)} price records")
+
+        #Join by symbols
+        combined_table = pd.merge(historical_prices_table, instruments_table, on='symbol', how='inner')
+        print(f"   Joined tables: {len(combined_table)} total rows")
+
+        #Selecting relevant columns
+        final_columns = ['symbol', 'description', 'assessmentDate', 'low', 'high', 'revision', 'status']
+        final_table = combined_table[final_columns]
+
+        #Changing data types
+        final_table['assessmentDate'] = final_table['assessmentDate'].astype(str)
+        final_table['low'] = final_table['low'].astype('Int64')
+        final_table['high'] = final_table['high'].astype('Int64')
+        final_table['symbol'] = final_table['symbol'].astype(str)
+
+        #Saving as .csv
+        print("Saving to CSV")
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        final_table.to_csv(OUTPUT_PATH, index=False)
+
+        print(f"Data saved to: {OUTPUT_PATH}")
+        print(f"Final data: {len(final_table)} rows, {len(final_table.columns)} columns")
+        print("\nFirst 3 rows:")
+        print(final_table.head(3).to_string())
+        
+    except Exception as e:
+        print(f"ERROR: {e}")
+        print("\nFull error details:")
+        traceback.print_exc()
+    
+
+
+if __name__ == "__main__":
+    main()
+
+# Read the CSV file we've just created
+df = pd.read_csv('fastmarkets_data.csv')
+
+# Convert assessmentDate to datetime
+df['assessmentDate'] = pd.to_datetime(df['assessmentDate'])
+
+# Create a simple line chart
+plt.figure(figsize=(12, 6))
+plt.plot(df['assessmentDate'], df['low'], label='Low Price', marker='o')
+plt.plot(df['assessmentDate'], df['high'], label='High Price', marker='s')
+plt.title('Fastmarkets Price History')
+plt.xlabel('Date')
+plt.ylabel('Price')
+plt.legend()
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig('price_chart.png')  # Save as image
+plt.show()
+
